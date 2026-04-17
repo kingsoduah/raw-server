@@ -1,7 +1,24 @@
 const http = require('http');
 const url = require('url');
 
-// In-memory data (IMPORTANT: outside server)
+const routes = {
+  GET: {},
+  POST: {}
+};
+
+const router = {
+  get: (path, handler) => {
+    routes.GET[path] = handler;
+  },
+  post: (path, handler) => {
+    routes.POST[path] = handler;
+  }
+};
+
+// ======================
+// DATA (PERSISTENT)
+// ======================
+
 let users = [
   { id: 1, name: "Kings" },
   { id: 2, name: "Alex" }
@@ -12,41 +29,94 @@ let products = [
   { id: 2, name: "Mouse" }
 ];
 
+// ======================
+// RESPONSE HELPER
+// ======================
+
 const sendJSON = (res, statusCode, data) => {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify(data));
 };
 
+// ======================
+// ROUTE DEFINITIONS (IMPORTANT: OUTSIDE SERVER)
+// ======================
+
+// USERS
+router.get("/users", (req, res, { query }) => {
+  let result = users;
+
+  if (query.name) {
+    result = result.filter(user =>
+      user.name.toLowerCase() === query.name.toLowerCase()
+    );
+  }
+
+  return sendJSON(res, 200, result);
+});
+
+router.post("/users", (req, res, { body }) => {
+  if (!body.name) {
+    return sendJSON(res, 400, { error: "Name is required" });
+  }
+
+  const newUser = {
+    id: Date.now(),
+    name: body.name
+  };
+
+  users.push(newUser);
+
+  return sendJSON(res, 201, newUser);
+});
+
+// PRODUCTS
+router.get("/products", (req, res, { query }) => {
+  let result = products;
+
+  if (query.name) {
+    result = result.filter(product =>
+      product.name.toLowerCase() === query.name.toLowerCase()
+    );
+  }
+
+  return sendJSON(res, 200, result);
+});
+
+router.post("/products", (req, res, { body }) => {
+  if (!body.name) {
+    return sendJSON(res, 400, { error: "Name is required" });
+  }
+
+  const newProduct = {
+    id: Date.now(),
+    name: body.name
+  };
+
+  products.push(newProduct);
+
+  return sendJSON(res, 201, newProduct);
+});
+
+// ======================
+// SERVER (RUNTIME ONLY)
+// ======================
+
 const server = http.createServer((req, res) => {
   const parsedUrl = url.parse(req.url, true);
   const pathname = parsedUrl.pathname;
   const query = parsedUrl.query;
+  const method = req.method;
 
-  // HOME
-  if (req.method === "GET" && pathname === "/") {
-    return sendJSON(res, 200, { message: "Home route!" });
+  const routeHandler = routes[method]?.[pathname];
+
+  if (!routeHandler) {
+    return sendJSON(res, 404, { error: "Route not found" });
   }
 
-  // ======================
-  // USERS
-  // ======================
-
-  // GET USERS
-  if (req.method === "GET" && pathname === "/users") {
-    let result = users;
-
-    if (query.name) {
-      result = result.filter(user =>
-        user.name.toLowerCase() === query.name.toLowerCase()
-      );
-    }
-
-    return sendJSON(res, 200, result);
-  }
-
-  // POST USERS
-  if (req.method === "POST" && pathname === "/users") {
+  // POST handling
+  if (method === "POST") {
     let body = "";
 
     req.on("data", (chunk) => {
@@ -55,20 +125,12 @@ const server = http.createServer((req, res) => {
 
     req.on("end", () => {
       try {
-        const parsedBody = JSON.parse(body);
+        const parsedBody = JSON.parse(body || "{}");
 
-        if (!parsedBody.name) {
-          return sendJSON(res, 400, { error: "Name is required" });
-        }
-
-        const newUser = {
-          id: Date.now(),
-          name: parsedBody.name
-        };
-
-        users.push(newUser);
-
-        return sendJSON(res, 201, newUser);
+        routeHandler(req, res, {
+          query,
+          body: parsedBody
+        });
       } catch (err) {
         return sendJSON(res, 400, { error: "Invalid JSON" });
       }
@@ -77,60 +139,8 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ======================
-  // PRODUCTS
-  // ======================
-
-  // GET PRODUCTS
-  if (req.method === "GET" && pathname === "/products") {
-    let result = products;
-
-    if (query.name) {
-      result = result.filter(product =>
-        product.name.toLowerCase() === query.name.toLowerCase()
-      );
-    }
-
-    return sendJSON(res, 200, result);
-  }
-
-  // POST PRODUCTS
-  if (req.method === "POST" && pathname === "/products") {
-    let body = "";
-
-    req.on("data", (chunk) => {
-      body += chunk.toString();
-    });
-
-    req.on("end", () => {
-      try {
-        const parsedBody = JSON.parse(body);
-
-        if (!parsedBody.name) {
-          return sendJSON(res, 400, { error: "Name is required" });
-        }
-
-        const newProduct = {
-          id: Date.now(),
-          name: parsedBody.name
-        };
-
-        products.push(newProduct);
-
-        return sendJSON(res, 201, newProduct);
-      } catch (err) {
-        return sendJSON(res, 400, { error: "Invalid JSON" });
-      }
-    });
-
-    return;
-  }
-
-  // ======================
-  // NOT FOUND
-  // ======================
-
-  return sendJSON(res, 404, { error: "Route not found" });
+  // GET handling
+  routeHandler(req, res, { query });
 });
 
 server.listen(3000, () => {
