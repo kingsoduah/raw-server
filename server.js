@@ -15,13 +15,35 @@ const router = {
   }
 };
 
+const sessions = {};
+
+const authenticate = (req, res) => {
+  const authHeader = req.headers["authorization"];
+
+  if (!authHeader) {
+    sendJSON(res, 401, { error: "Unauthorized" });
+    return null;
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  const session = sessions[token];
+
+  if (!session) {
+    sendJSON(res, 401, { error: "Invalid token" });
+    return null;
+  }
+
+  return session;
+};
+
 // ======================
 // DATA (PERSISTENT)
 // ======================
 
 let users = [
-  { id: 1, name: "Kings" },
-  { id: 2, name: "Alex" }
+  { id: 1, name: "Kings", password: "1234", role: "admin" },
+  { id: 2, name: "Alex", password: "abcd", role: "user" }
 ];
 
 let products = [
@@ -45,7 +67,13 @@ const sendJSON = (res, statusCode, data) => {
 
 // USERS
 router.get("/users", (req, res, { query }) => {
-  let result = users;
+  const session = authenticate(req, res);
+  if (!session) return;
+
+  let result = users.map(u => ({
+    id: u.id,
+    name: u.name
+  }));
 
   if (query.name) {
     result = result.filter(user =>
@@ -56,19 +84,24 @@ router.get("/users", (req, res, { query }) => {
   return sendJSON(res, 200, result);
 });
 
-router.post("/users", (req, res, { body }) => {
-  if (!body.name) {
-    return sendJSON(res, 400, { error: "Name is required" });
+router.post("/login", (req, res, { body }) => {
+  const { name, password } = body;
+
+  const user = users.find(u => u.name === name && u.password === password);
+
+  if (!user) {
+    return sendJSON(res, 401, { error: "Authentication failed" });
   }
 
-  const newUser = {
-    id: Date.now(),
-    name: body.name
+  // Generate simple token
+  const token = "token_" + Date.now();
+
+  sessions[token] = {
+    userId: user.id,
+    role: user.role
   };
 
-  users.push(newUser);
-
-  return sendJSON(res, 201, newUser);
+  return sendJSON(res, 200, { token });
 });
 
 // PRODUCTS
@@ -85,6 +118,14 @@ router.get("/products", (req, res, { query }) => {
 });
 
 router.post("/products", (req, res, { body }) => {
+  const session = authenticate(req, res);
+  if (!session) return;
+
+  // Authorization check
+  if (session.role !== "admin") {
+    return sendJSON(res, 403, { error: "Forbidden" });
+  }
+
   if (!body.name) {
     return sendJSON(res, 400, { error: "Name is required" });
   }
