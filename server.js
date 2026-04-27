@@ -1,33 +1,27 @@
 const http = require('http');
 const url = require('url');
+
+// ======================
+// INFRASTRUCTURE
+// ======================
+
+const routes = { GET: {}, POST: {} };
 const middlewares = [];
+
+const router = {
+  get: (path, handler) => { routes.GET[path] = handler; },
+  post: (path, handler) => { routes.POST[path] = handler; }
+};
 
 const use = (middleware) => {
   middlewares.push(middleware);
-};
-
-const routes = {
-  GET: {},
-  POST: {}
-};
-
-const router = {
-  get: (path, handler) => {
-    routes.GET[path] = handler;
-  },
-  post: (path, handler) => {
-    routes.POST[path] = handler;
-  }
 };
 
 const runMiddlewares = (req, res, context, done) => {
   let index = 0;
 
   const next = () => {
-    if (index >= middlewares.length) {
-      return done();
-    }
-
+    if (index >= middlewares.length) return done();
     const middleware = middlewares[index++];
     middleware(req, res, context, next);
   };
@@ -35,31 +29,38 @@ const runMiddlewares = (req, res, context, done) => {
   next();
 };
 
+// ======================
+// HELPERS
+// ======================
+
+const sendJSON = (res, statusCode, data) => {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(data));
+};
+
+// ======================
+// DATA
+// ======================
+
+let users = [
+  { id: 1, name: "Kings", password: "1234", role: "admin" },
+  { id: 2, name: "Alex", password: "abcd", role: "user" }
+];
+
+let products = [
+  { id: 1, name: "Laptop" },
+  { id: 2, name: "Mouse" }
+];
+
 const sessions = {};
 
-// const authenticate = (req, res) => {
-//   const authHeader = req.headers["authorization"];
-
-//   if (!authHeader) {
-//     sendJSON(res, 401, { error: "Unauthorized" });
-//     return null;
-//   }
-
-//   const token = authHeader.split(" ")[1];
-
-//   const session = sessions[token];
-
-//   if (!session) {
-//     sendJSON(res, 401, { error: "Invalid token" });
-//     return null;
-//   }
-
-//   return session;
-// };
-
+// ======================
+// MIDDLEWARE
+// ======================
 
 use((req, res, context, next) => {
-  if (req.url === "/login") {
+  if (context.pathname === "/login") {
     return next();
   }
 
@@ -77,53 +78,12 @@ use((req, res, context, next) => {
   }
 
   context.user = session;
-
   next();
 });
 
 // ======================
-// DATA (PERSISTENT)
+// ROUTES
 // ======================
-
-let users = [
-  { id: 1, name: "Kings", password: "1234", role: "admin" },
-  { id: 2, name: "Alex", password: "abcd", role: "user" }
-];
-
-let products = [
-  { id: 1, name: "Laptop" },
-  { id: 2, name: "Mouse" }
-];
-
-// ======================
-// RESPONSE HELPER
-// ======================
-
-const sendJSON = (res, statusCode, data) => {
-  res.statusCode = statusCode;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(data));
-};
-
-// ======================
-// ROUTE DEFINITIONS (IMPORTANT: OUTSIDE SERVER)
-// ======================
-
-// USERS
-router.get("/users", (req, res, context) => {
-  let result = users.map(u => ({
-    id: u.id,
-    name: u.name
-  }));
-
-  if (context.query.name) {
-    result = result.filter(user =>
-      user.name.toLowerCase() === context.query.name.toLowerCase()
-    );
-  }
-
-  return sendJSON(res, 200, result);
-});
 
 router.post("/login", (req, res, { body }) => {
   const { name, password } = body;
@@ -134,7 +94,6 @@ router.post("/login", (req, res, { body }) => {
     return sendJSON(res, 401, { error: "Authentication failed" });
   }
 
-  // Generate simple token
   const token = "token_" + Date.now();
 
   sessions[token] = {
@@ -145,7 +104,18 @@ router.post("/login", (req, res, { body }) => {
   return sendJSON(res, 200, { token });
 });
 
-// PRODUCTS
+router.get("/users", (req, res, context) => {
+  let result = users.map(u => ({ id: u.id, name: u.name }));
+
+  if (context.query.name) {
+    result = result.filter(user =>
+      user.name.toLowerCase() === context.query.name.toLowerCase()
+    );
+  }
+
+  return sendJSON(res, 200, result);
+});
+
 router.get("/products", (req, res, { query }) => {
   let result = products;
 
@@ -178,14 +148,14 @@ router.post("/products", (req, res, context) => {
 });
 
 // ======================
-// SERVER (RUNTIME ONLY)
+// SERVER
 // ======================
 
 const server = http.createServer((req, res) => {
   const parsedUrl = url.parse(req.url, true);
   const pathname = parsedUrl.pathname;
   const query = parsedUrl.query;
-  const method = req.method;
+  const method = req.method.toUpperCase();
 
   const routeHandler = routes[method]?.[pathname];
 
@@ -193,41 +163,34 @@ const server = http.createServer((req, res) => {
     return sendJSON(res, 404, { error: "Route not found" });
   }
 
-  // POST handling
- if (method === "POST") {
-  let body = "";
+  if (method === "POST") {
+    let body = "";
 
-  req.on("data", (chunk) => {
-    body += chunk.toString();
+    req.on("data", chunk => body += chunk.toString());
+
+    req.on("end", () => {
+      try {
+        const parsedBody = JSON.parse(body || "{}");
+
+        const context = { query, body: parsedBody, pathname };
+
+        runMiddlewares(req, res, context, () => {
+          routeHandler(req, res, context);
+        });
+
+      } catch {
+        return sendJSON(res, 400, { error: "Invalid JSON" });
+      }
+    });
+
+    return;
+  }
+
+  const context = { query, pathname };
+
+  runMiddlewares(req, res, context, () => {
+    routeHandler(req, res, context);
   });
-
-  req.on("end", () => {
-    try {
-      const parsedBody = JSON.parse(body || "{}");
-
-      const context = {
-        query,
-        body: parsedBody
-      };
-
-      runMiddlewares(req, res, context, () => {
-        routeHandler(req, res, context);
-      });
-
-    } catch (err) {
-      return sendJSON(res, 400, { error: "Invalid JSON" });
-    }
-  });
-
-  return;
-}
-
- // GET requests
-const context = { query };
-
-runMiddlewares(req, res, context, () => {
-  routeHandler(req, res, context);
-});
 });
 
 server.listen(3000, () => {
