@@ -33,10 +33,49 @@ const runMiddlewares = (req, res, context, done) => {
 // HELPERS
 // ======================
 
-const sendJSON = (res, statusCode, data) => {
-  res.statusCode = statusCode;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(data));
+const validate = (schema, data) => {
+  const errors = [];
+
+  for (const field in schema) {
+    const rules = schema[field];
+    const value = data[field];
+
+    // 1. Existence check
+    if (rules.required && (value === undefined || value === null)) {
+      errors.push(`${field} is required`);
+      continue;
+    }
+
+    // Skip further checks if not present and not required
+    if (value === undefined) continue;
+
+    // 2. Type check
+    if (rules.type && typeof value !== rules.type) {
+      errors.push(`${field} must be a ${rules.type}`);
+      continue;
+    }
+
+    // 3. Constraint check
+    if (rules.minLength && value.length < rules.minLength) {
+      errors.push(`${field} must be at least ${rules.minLength} characters`);
+    }
+
+    if (rules.maxLength && value.length > rules.maxLength) {
+      errors.push(`${field} must be at most ${rules.maxLength} characters`);
+    }
+  }
+
+  return errors;
+};
+
+const transform = (data) => {
+  const transformed = { ...data };
+
+  if (transformed.name) {
+    transformed.name = transformed.name.trim();
+  }
+
+  return transformed;
 };
 
 // ======================
@@ -86,7 +125,19 @@ use((req, res, context, next) => {
 // ======================
 
 router.post("/login", (req, res, { body }) => {
-  const { name, password } = body;
+
+  const transformedBody = transform(body);
+
+  const errors = validate({
+    name: { required: true, type: "string", minLength: 2 },
+    password: { required: true, type: "string", minLength: 3 }
+  }, transformedBody);
+
+  if (errors.length > 0) {
+    return sendJSON(res, 400, { errors });
+  }
+
+  const { name, password } = transformedBody;
 
   const user = users.find(u => u.name === name && u.password === password);
 
@@ -129,17 +180,24 @@ router.get("/products", (req, res, { query }) => {
 });
 
 router.post("/products", (req, res, context) => {
+
   if (context.user.role !== "admin") {
     return sendJSON(res, 403, { error: "Forbidden" });
   }
 
-  if (!context.body.name) {
-    return sendJSON(res, 400, { error: "Name is required" });
+  const transformedBody = transform(context.body);
+
+  const errors = validate({
+    name: { required: true, type: "string", minLength: 2 }
+  }, transformedBody);
+
+  if (errors.length > 0) {
+    return sendJSON(res, 400, { errors });
   }
 
   const newProduct = {
     id: Date.now(),
-    name: context.body.name
+    name: transformedBody.name
   };
 
   products.push(newProduct);
