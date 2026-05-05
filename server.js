@@ -168,13 +168,22 @@ router.get("/users", (req, res, context) => {
 });
 
 router.get("/products", (req, res, { query }) => {
+
   let result = products;
 
-  if (query.name) {
-    result = result.filter(product =>
-      product.name.toLowerCase() === query.name.toLowerCase()
-    );
+  // Transformation
+  const page = Number(query.page) || 1;
+  const limit = Number(query.limit) || result.length;
+
+  // Validation
+  if (isNaN(page) || isNaN(limit)) {
+    return sendJSON(res, 400, { error: "page and limit must be numbers" });
   }
+
+  const start = (page - 1) * limit;
+  const end = start + limit;
+
+  result = result.slice(start, end);
 
   return sendJSON(res, 200, result);
 });
