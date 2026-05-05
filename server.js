@@ -30,8 +30,14 @@ const runMiddlewares = (req, res, context, done) => {
 };
 
 // ======================
-// HELPERS
+// HELPERS (FIXED POSITION)
 // ======================
+
+const sendJSON = (res, statusCode, data) => {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(data));
+};
 
 const validate = (schema, data) => {
   const errors = [];
@@ -40,27 +46,23 @@ const validate = (schema, data) => {
     const rules = schema[field];
     const value = data[field];
 
-    // 1. Existence check
     if (rules.required && (value === undefined || value === null)) {
       errors.push(`${field} is required`);
       continue;
     }
 
-    // Skip further checks if not present and not required
     if (value === undefined) continue;
 
-    // 2. Type check
     if (rules.type && typeof value !== rules.type) {
       errors.push(`${field} must be a ${rules.type}`);
       continue;
     }
 
-    // 3. Constraint check
-    if (rules.minLength && value.length < rules.minLength) {
+    if (rules.minLength && typeof value === "string" && value.length < rules.minLength) {
       errors.push(`${field} must be at least ${rules.minLength} characters`);
     }
 
-    if (rules.maxLength && value.length > rules.maxLength) {
+    if (rules.maxLength && typeof value === "string" && value.length > rules.maxLength) {
       errors.push(`${field} must be at most ${rules.maxLength} characters`);
     }
   }
@@ -95,7 +97,7 @@ let products = [
 const sessions = {};
 
 // ======================
-// MIDDLEWARE
+// MIDDLEWARE (FIXED TOKEN PARSING)
 // ======================
 
 use((req, res, context, next) => {
@@ -109,7 +111,13 @@ use((req, res, context, next) => {
     return sendJSON(res, 401, { error: "Unauthorized" });
   }
 
-  const token = authHeader.split(" ")[1];
+  const parts = authHeader.split(" ");
+
+  if (parts.length !== 2 || parts[0] !== "Bearer") {
+    return sendJSON(res, 401, { error: "Invalid authorization format" });
+  }
+
+  const token = parts[1];
   const session = sessions[token];
 
   if (!session) {
@@ -171,11 +179,10 @@ router.get("/products", (req, res, { query }) => {
 
   let result = products;
 
-  // Transformation
-  const page = Number(query.page) || 1;
-  const limit = Number(query.limit) || result.length;
+  // FIXED pagination logic
+  const page = query.page ? Number(query.page) : 1;
+  const limit = query.limit ? Number(query.limit) : result.length;
 
-  // Validation
   if (isNaN(page) || isNaN(limit)) {
     return sendJSON(res, 400, { error: "page and limit must be numbers" });
   }
