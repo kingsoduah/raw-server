@@ -1,9 +1,7 @@
 const http = require('http');
 const url = require('url');
 
-// ======================
 // INFRASTRUCTURE
-// ======================
 
 const routes = { GET: {}, POST: {} };
 const middlewares = [];
@@ -29,9 +27,7 @@ const runMiddlewares = (req, res, context, done) => {
   next();
 };
 
-// ======================
-// HELPERS (FIXED POSITION)
-// ======================
+// HELPERS 
 
 const sendJSON = (res, statusCode, data) => {
   res.statusCode = statusCode;
@@ -80,9 +76,8 @@ const transform = (data) => {
   return transformed;
 };
 
-// ======================
+
 // DATA
-// ======================
 
 let users = [
   { id: 1, name: "Kings", password: "1234", role: "admin" },
@@ -96,13 +91,102 @@ let products = [
 
 const sessions = {};
 
-// ======================
-// MIDDLEWARE (FIXED TOKEN PARSING)
-// ======================
+
+// REPOSITORIES
+
+const userRepository = {
+  findByCredentials: (name, password) => {
+    return users.find(
+      user => user.name === name && user.password === password
+    );
+  },
+
+  getAll: () => {
+    return users.map(user => ({
+      id: user.id,
+      name: user.name
+    }));
+  }
+};
+
+const productRepository = {
+  getAll: () => {
+    return products;
+  },
+
+  create: (productData) => {
+    const newProduct = {
+      id: Date.now(),
+      ...productData
+    };
+
+    products.push(newProduct);
+
+    return newProduct;
+  }
+};
+
+
+// SERVICES
+
+const authService = {
+  login: ({ name, password }) => {
+    const user = userRepository.findByCredentials(name, password);
+
+    if (!user) {
+      return null;
+    }
+
+    const token = "token_" + Date.now();
+
+    sessions[token] = {
+      userId: user.id,
+      role: user.role
+    };
+
+    return { token };
+  }
+};
+
+const productService = {
+  createProduct: (productData) => {
+    return productRepository.create(productData);
+  },
+
+  getProducts: ({ page, limit }) => {
+    const allProducts = productRepository.getAll();
+
+    const finalLimit = limit || allProducts.length;
+
+    const start = (page - 1) * finalLimit;
+    const end = start + finalLimit;
+
+   return allProducts.slice(start, end);
+  }
+};
+
+const userService = {
+  getUsers: (query) => {
+    let users = userRepository.getAll();
+
+    if (query.name) {
+      users = users.filter(user =>
+        user.name.toLowerCase() === query.name.toLowerCase()
+      );
+    }
+
+    return users;
+  }
+};
+
+
+// MIDDLEWARES
 
 use((req, res, context, next) => {
-  if (context.pathname === "/login") {
-    return next();
+  const publicRoutes = ["/login"];
+
+  if (publicRoutes.includes(context.pathname)) {
+   return next();
   }
 
   const authHeader = req.headers["authorization"];
@@ -128,9 +212,7 @@ use((req, res, context, next) => {
   next();
 });
 
-// ======================
-// ROUTES
-// ======================
+// CONTROLLERS/ROUTES
 
 router.post("/login", (req, res, { body }) => {
 
@@ -145,52 +227,39 @@ router.post("/login", (req, res, { body }) => {
     return sendJSON(res, 400, { errors });
   }
 
-  const { name, password } = transformedBody;
+  const result = authService.login(transformedBody);
 
-  const user = users.find(u => u.name === name && u.password === password);
-
-  if (!user) {
-    return sendJSON(res, 401, { error: "Authentication failed" });
+  if (!result) {
+    return sendJSON(res, 401, {
+      error: "Authentication failed"
+    });
   }
 
-  const token = "token_" + Date.now();
-
-  sessions[token] = {
-    userId: user.id,
-    role: user.role
-  };
-
-  return sendJSON(res, 200, { token });
+  return sendJSON(res, 200, result);
 });
 
 router.get("/users", (req, res, context) => {
-  let result = users.map(u => ({ id: u.id, name: u.name }));
 
-  if (context.query.name) {
-    result = result.filter(user =>
-      user.name.toLowerCase() === context.query.name.toLowerCase()
-    );
-  }
+  const result = userService.getUsers(context.query);
 
   return sendJSON(res, 200, result);
 });
 
 router.get("/products", (req, res, { query }) => {
 
-  let result = products;
-
-  // FIXED pagination logic
   const page = query.page ? Number(query.page) : 1;
-  const limit = query.limit ? Number(query.limit) : result.length;
+  const limit = query.limit ? Number(query.limit) : undefined;
 
   if (isNaN(page) || isNaN(limit)) {
-    return sendJSON(res, 400, { error: "page and limit must be numbers" });
+    return sendJSON(res, 400, {
+      error: "page and limit must be numbers"
+    });
   }
 
-  const start = (page - 1) * limit;
-  const end = start + limit;
-
-  result = result.slice(start, end);
+  const result = productService.getProducts({
+    page,
+    limit
+  });
 
   return sendJSON(res, 200, result);
 });
@@ -211,19 +280,12 @@ router.post("/products", (req, res, context) => {
     return sendJSON(res, 400, { errors });
   }
 
-  const newProduct = {
-    id: Date.now(),
-    name: transformedBody.name
-  };
+  const product = productService.createProduct(transformedBody);
 
-  products.push(newProduct);
-
-  return sendJSON(res, 201, newProduct);
+  return sendJSON(res, 201, product);
 });
 
-// ======================
 // SERVER
-// ======================
 
 const server = http.createServer((req, res) => {
   const parsedUrl = url.parse(req.url, true);
