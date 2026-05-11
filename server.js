@@ -114,6 +114,10 @@ const productRepository = {
     return products;
   },
 
+  findById: (id) => {
+    return products.find(product => product.id === id);
+  },
+
   create: (productData) => {
     const newProduct = {
       id: Date.now(),
@@ -161,7 +165,16 @@ const productService = {
     const start = (page - 1) * finalLimit;
     const end = start + finalLimit;
 
-   return allProducts.slice(start, end);
+    return {
+      data: allProducts.slice(start, end),
+      total: allProducts.length,
+      page,
+      totalPages: Math.ceil(allProducts.length / finalLimit)
+    };
+  },
+
+  getProductById: (id) => {
+    return productRepository.findById(id);
   }
 };
 
@@ -245,23 +258,25 @@ router.get("/users", (req, res, context) => {
   return sendJSON(res, 200, result);
 });
 
-router.get("/products", (req, res, { query }) => {
+router.get("/products/:id", (req, res, context) => {
 
-  const page = query.page ? Number(query.page) : 1;
-  const limit = query.limit ? Number(query.limit) : undefined;
+  const id = Number(context.params.id);
 
-  if (isNaN(page) || isNaN(limit)) {
+  if (isNaN(id)) {
     return sendJSON(res, 400, {
-      error: "page and limit must be numbers"
+      error: "Product ID must be a number"
     });
   }
 
-  const result = productService.getProducts({
-    page,
-    limit
-  });
+  const product = productService.getProductById(id);
 
-  return sendJSON(res, 200, result);
+  if (!product) {
+    return sendJSON(res, 404, {
+      error: "Product not found"
+    });
+  }
+
+  return sendJSON(res, 200, product);
 });
 
 router.post("/products", (req, res, context) => {
@@ -293,11 +308,13 @@ const server = http.createServer((req, res) => {
   const query = parsedUrl.query;
   const method = req.method.toUpperCase();
 
-  const routeHandler = routes[method]?.[pathname];
+  const matchedRoute = matchRoute(method, pathname);
 
-  if (!routeHandler) {
-    return sendJSON(res, 404, { error: "Route not found" });
-  }
+if (!matchedRoute) {
+  return sendJSON(res, 404, { error: "Route not found" });
+}
+
+const routeHandler = matchedRoute.handler;
 
   if (method === "POST") {
     let body = "";
@@ -308,7 +325,7 @@ const server = http.createServer((req, res) => {
       try {
         const parsedBody = JSON.parse(body || "{}");
 
-        const context = { query, body: parsedBody, pathname };
+        const context = { query, body: parsedBody, pathname, params: matchedRoute.params };
 
         runMiddlewares(req, res, context, () => {
           routeHandler(req, res, context);
@@ -322,11 +339,59 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const context = { query, pathname };
+  const context = { query, pathname, params: matchedRoute.params };
 
   runMiddlewares(req, res, context, () => {
     routeHandler(req, res, context);
   });
+
+  const matchRoute = (method, pathname) => {
+  const methodRoutes = routes[method] || {};
+
+  // Exact match first
+  if (methodRoutes[pathname]) {
+    return {
+      handler: methodRoutes[pathname],
+      params: {}
+    };
+  }
+
+  // Dynamic route matching
+  for (const routePath in methodRoutes) {
+
+    const routeParts = routePath.split("/");
+    const pathParts = pathname.split("/");
+
+    if (routeParts.length !== pathParts.length) {
+      continue;
+    }
+
+    let isMatch = true;
+    const params = {};
+
+    for (let i = 0; i < routeParts.length; i++) {
+      const routePart = routeParts[i];
+      const pathPart = pathParts[i];
+
+      if (routePart.startsWith(":")) {
+        const paramName = routePart.slice(1);
+        params[paramName] = pathPart;
+      } else if (routePart !== pathPart) {
+        isMatch = false;
+        break;
+      }
+    }
+
+    if (isMatch) {
+      return {
+        handler: methodRoutes[routePath],
+        params
+      };
+    }
+  }
+
+  return null;
+};
 });
 
 server.listen(3000, () => {
